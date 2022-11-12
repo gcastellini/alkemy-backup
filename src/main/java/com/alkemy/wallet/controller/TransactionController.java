@@ -1,18 +1,37 @@
 package com.alkemy.wallet.controller;
 
 import com.alkemy.wallet.dto.TransactionDto;
+import com.alkemy.wallet.dto.TransactionPaymentDto;
+import com.alkemy.wallet.mapper.TransactionMapper;
+import com.alkemy.wallet.model.Account;
+import com.alkemy.wallet.model.Transaction;
+import com.alkemy.wallet.repository.AccountRepository;
+import com.alkemy.wallet.repository.TransactionRepository;
 import com.alkemy.wallet.service.ITransactionService;
-import org.springframework.boot.util.LambdaSafe;
+import com.alkemy.wallet.service.IUserService;
+import com.alkemy.wallet.util.Type;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.List;
 
 @RestController
 @RequestMapping
 public class TransactionController {
+    @Autowired
     private ITransactionService service;
+    @Autowired
+    private IUserService userService;
+
+    @Autowired
+    private TransactionRepository repo;
+
+    @Autowired
+    private AccountRepository accRepo;
+
 
 
     public TransactionController(ITransactionService service) {
@@ -25,13 +44,13 @@ public class TransactionController {
         return service.listUserId(id);
     }
 
-    @GetMapping("/transactions/:id{id}")
+    @PostMapping("/transactions/:id{id}")
     public TransactionDto transactionDetail(@PathVariable("id") long id) {
         String principal = SecurityContextHolder.getContext().getAuthentication().getName().toString();
         TransactionDto transaction = new TransactionDto();
         long idUser = 0;
         for (int i = 0; i < service.listUser().size(); i++) {
-            if (service.listUser().get(i).getEmail().toString().equals(principal)) {
+            if (service.listUser().get(i).getEmail().equals(principal)) {
                 idUser = service.listUser().get(i).getId();
             }
         }
@@ -63,5 +82,35 @@ public class TransactionController {
             transaction.setDescription(description);
             return service.edit(transaction);
         } else throw new RuntimeException();
+    }
+
+    @PostMapping
+    @RequestMapping("transactions/payment")
+    public ResponseEntity<Object> payment(@RequestBody TransactionPaymentDto dto) throws Exception {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        Transaction transaction = new TransactionMapper().dtoToEntity(dto);
+        List<Account> listAccount = accRepo.findAll();
+        Account acc = new Account();
+        for (int i = 0; i < listAccount.size(); i++) {
+            if (dto.getAccountId().equals(listAccount.get(i).getAccountId())) {
+                acc = listAccount.get(i);
+            }
+        }
+            transaction.setAccount(acc);
+            transaction.setType(Type.payment);
+            transaction.setUser(userService.findByEmail(email));
+            TransactionDto result = new TransactionMapper().map(service.savePayment(transaction));
+            return ResponseEntity.status(HttpStatus.CREATED).body(result);
+
+    }
+
+    @PostMapping
+    @RequestMapping("transactions/deposit")
+    public ResponseEntity<Object> deposit(@RequestBody TransactionPaymentDto dto, @RequestHeader(name="Authorization") String token) throws Exception {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        Transaction transaction = new TransactionMapper().dtoToEntity(dto);
+        transaction.setUser(userService.findByEmail(email));
+        TransactionPaymentDto result = new TransactionMapper().entityToDto(service.saveDeposit(transaction));
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 }

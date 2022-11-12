@@ -1,34 +1,137 @@
 package com.alkemy.wallet.service.impl;
 
+import com.alkemy.wallet.dto.AccountDto;
 import com.alkemy.wallet.dto.TransactionDto;
 import com.alkemy.wallet.dto.basicDto.UserBasicDTO;
+import com.alkemy.wallet.mapper.AccountMapper;
 import com.alkemy.wallet.mapper.TransactionMapper;
 import com.alkemy.wallet.mapper.UserMapper;
+import com.alkemy.wallet.model.Account;
 import com.alkemy.wallet.model.Transaction;
+import com.alkemy.wallet.model.User;
+import com.alkemy.wallet.repository.AccountRepository;
+import com.alkemy.wallet.repository.IUserRepository;
 import com.alkemy.wallet.repository.TransactionRepository;
-import com.alkemy.wallet.repository.UserRepository;
+import com.alkemy.wallet.service.IAccountService;
 import com.alkemy.wallet.service.ITransactionService;
+import com.alkemy.wallet.service.IUserService;
+import com.alkemy.wallet.util.CurrencyEnum;
+import com.alkemy.wallet.util.Type;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 @Service
 public class TransactionServiceImpl implements ITransactionService {
+
     @Autowired
-    private TransactionRepository repo;
     private TransactionMapper mapper;
 
-    private UserRepository userRepo;
-
+    @Autowired
+    private AccountRepository accRepo;
+    @Autowired
+    AccountMapper accountMapper;
+    @Autowired
+    private IUserRepository userRepo;
+    @Autowired
     private UserMapper userMapper;
+    @Autowired
+    private TransactionRepository repo;
+    @Autowired
+    private IAccountService accountService;
+    @Autowired
+    private IUserService userService;
+    @Autowired
+    private TransactionRepository iTransactionRepository;
 
-    public TransactionServiceImpl (TransactionRepository repo,TransactionMapper mapper,UserRepository userRepo,UserMapper userMapper){
-        this.repo=repo;
-        this.mapper=mapper;
-        this.userRepo=userRepo;
-        this.userMapper=userMapper;
+
+    @Override
+    public TransactionDto sendUsd(long accountFromId, long userId, double amount, long accountToId, Type type) throws Exception {
+        Account accountFrom = accountService.findById(accountFromId);
+        Account accountTo = accountService.findById(accountToId);
+        //TODO -> Reemplazar por el usuario autenticado
+        User userFrom = userService.findById(userId);
+        User userTo = accountTo.getUserId();
+
+        validateTransferCanProceed(accountFrom, accountTo, userFrom, userTo, amount, type);
+        //        if (!accountFrom.getUserId().equals(userFrom)){
+//            throw new Exception("You are not the owner of the account");
+//        }
+//        if (accountFrom.equals(accountTo)){
+//            throw new Exception("You can not send money to your own account");
+//        }
+//        if(accountFrom.getBalance()<amount){
+//            throw new Exception("Insufficient balance");
+//        }
+//        if(accountFrom.getTransactionLimit()<amount){
+//            throw new Exception("Transaction limit exceeded");
+//        }
+//        if(accountFrom.getCurrency()!= CurrencyEnum.USD){
+//            throw new Exception("Your account is not a USD account");
+//        }
+//        if(accountTo.getCurrency()!= CurrencyEnum.USD){
+//            throw new Exception("The destination account is not a USD account");
+//        }
+//        if(amount<=0){
+//            throw new Exception("You can not make a transaction with 0 or a negative amount");
+//        }
+//        if(type!=Type.payment){
+//            throw new Exception("To transfer money you have to select payment type");
+//        }
+
+        Transaction transactionFrom = new Transaction();
+        transactionFrom.setUser(userFrom);
+        transactionFrom.setAccount(accountFrom);
+        transactionFrom.setAmount(-amount);
+        transactionFrom.setType(type);
+        transactionFrom.setTransactionDate(Timestamp.valueOf(LocalDateTime.now()));
+        transactionFrom.setDescription(Type.payment + " to " + userTo.getLastName() + ", " + userTo.getFirstName() + ", account number: "+ accountTo.getAccountId());
+        iTransactionRepository.save(transactionFrom);
+        Transaction transactionTo = new Transaction();
+        transactionTo.setUser(userTo);
+        transactionTo.setAccount(accountTo);
+        transactionTo.setAmount(amount);
+        transactionTo.setType(Type.income);
+        transactionTo.setTransactionDate(Timestamp.valueOf(LocalDateTime.now()));
+        transactionTo.setDescription(Type.income + " from " + userFrom.getLastName() + ", " + userFrom.getFirstName() + ", account number: "+ accountFrom.getAccountId());
+        iTransactionRepository.save(transactionTo);
+        TransactionDto trans = mapper.map(transactionFrom);
+        return trans;
+    }
+
+    private void validateTransferCanProceed(Account accountFrom, Account accountTo, User userFrom, User userTo, double amount, Type type) throws Exception {
+        if(userFrom==userTo){
+            throw new Exception("You can not send money to yourself");
+        }
+        if (!accountFrom.getUserId().equals(userFrom)){
+            throw new Exception("You are not the owner of the account");
+        }
+        if (accountFrom.equals(accountTo)){
+            throw new Exception("You can not send money to your own account");
+        }
+        if(accountFrom.getBalance()<amount){
+            throw new Exception("Insufficient balance");
+        }
+        if(accountFrom.getTransactionLimit()<amount){
+            throw new Exception("Transaction limit exceeded");
+        }
+        if(accountFrom.getCurrency()!= CurrencyEnum.USD){
+            throw new Exception("This is not a USD account");
+        }
+        if(accountTo.getCurrency()!= CurrencyEnum.USD){
+            throw new Exception("This is not a USD account");
+        }
+        if(amount<=0){
+            throw new Exception("You can not make a transaction with 0 or a negative amount");
+        }
+        if(type!=Type.payment){
+            throw new Exception("To transfer money you have to select payment type");
+        }
     }
 
     @Override
@@ -53,9 +156,72 @@ public class TransactionServiceImpl implements ITransactionService {
     }
 
     @Override
+    public List<AccountDto> listAccounts(){
+        List<AccountDto>  accountList = accountMapper.map(accRepo.findAll());
+        return  accountList;
+
+    }
+
+    @Override
     public TransactionDto edit (TransactionDto t){
         Transaction transaction = mapper.map(t);
         repo.save(transaction);
         return mapper.map(transaction);
     }
+
+
+
+    /**
+     * Method to persist a payment from an account in the database.
+     * @param transaction
+     * @return Transaction entity.
+     * @throws Exception
+     */
+    @Override
+    public Transaction savePayment(Transaction transaction) throws Exception {
+        Transaction result = transaction;
+        if(transaction.getAccount().getUserId().equals(transaction.getUser().getId())) {
+            if (accountService.limitTransactions(transaction) && accountService.accountFunds(transaction)) {
+                transaction.setType(Type.payment);
+                accountService.accountBalance(transaction);
+                result = repo.save(transaction);
+
+            } else
+                throw new Exception("The diary transaction limit has been reached or your account funds are not enough");
+        }
+
+       return result;
+    }
+
+    /**
+     * Method to save a deposit into an account and persists it in the database.
+     * @param transaction
+     * @return Transaction Entity
+     * @throws Exception
+     */
+    @Override
+    public Transaction saveDeposit(Transaction transaction) throws Exception {
+        Transaction result;
+        if(transaction.getAccount().getUserId().equals(transaction.getUser().getId())) {
+            if (accountService.limitTransactions(transaction) && accountService.accountFunds(transaction)) {
+                transaction.setType(Type.deposit);
+                accountService.accountBalance(transaction);
+                result = repo.save(transaction);
+            } else
+                throw new Exception("The diary transaction limit has been reached or your account funds are not enough");
+        }
+        else
+            throw new Exception("The account does not belong to the logged user.");
+        return result;
+    }
+
+
+
+    @Override
+    public List<Transaction> findByAccount(Long id) {
+
+        return repo.findByAccount(id);
+
+    }
+
 }
